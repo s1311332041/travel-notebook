@@ -396,8 +396,10 @@ const TripPlanner = ({ user, tripId, onBack }) => {
       <div className="flex-1 flex overflow-hidden">
         {/* Calendar Grid */}
         <div className="flex-1 overflow-y-auto relative bg-[#fffef9] custom-scrollbar" style={{ backgroundImage: 'linear-gradient(#f0f0f0 1px, transparent 1px)', backgroundSize: '100% 30px' }}>
-          <div className="flex border-b-2 border-[#d6d3cb] bg-[#fdfbf7] sticky top-0 z-30 shadow-sm">
-            <div className="w-16 border-r border-[#d6d3cb] bg-[#fdfbf7]"></div>
+          {/* Days Header - Sticky */}
+          <div className="flex border-b-2 border-[#d6d3cb] bg-[#fdfbf7] sticky top-0 z-30 shadow-sm min-w-max">
+            {/* Corner Placeholder - Sticky Left */}
+            <div className="w-16 border-r border-[#d6d3cb] bg-[#fdfbf7] sticky left-0 z-40 shadow-[2px_0_5px_rgba(0,0,0,0.05)]"></div>
             {daysArray.map((day, idx) => (
               <div key={day} className="flex-1 text-center py-2 border-r border-dashed border-[#d6d3cb] last:border-r-0 min-w-[180px]">
                 <div className="text-base font-bold text-[#2c2825]">{getDisplayDate(tripData.startDate, idx)}</div>
@@ -405,8 +407,9 @@ const TripPlanner = ({ user, tripId, onBack }) => {
             ))}
           </div>
 
-          <div className="flex" style={{ minHeight: '1440px' }}>
-             <div className="w-16 flex-shrink-0 flex flex-col border-r-2 border-[#d6d3cb] bg-[#fdfbf7] sticky left-0 z-10 select-none shadow-[2px_0_5px_rgba(0,0,0,0.05)]">
+          <div className="flex min-w-max" style={{ minHeight: '1440px' }}>
+             {/* Time Column - Sticky Left */}
+             <div className="w-16 flex-shrink-0 flex flex-col border-r-2 border-[#d6d3cb] bg-[#fdfbf7] sticky left-0 z-30 select-none shadow-[2px_0_5px_rgba(0,0,0,0.05)]">
               {HOURS.map(hour => (
                 <div key={hour} className="h-[60px] text-xs text-[#8c7b6c] text-right pr-2 relative -top-2 font-bold">{hour}:00</div>
               ))}
@@ -562,7 +565,7 @@ const TripPlanner = ({ user, tripId, onBack }) => {
                    </div>
                    <div className="flex gap-1">
                      {TAG_COLORS.map(color => (
-                       <button key={color.id} type="button" onClick={() => setNewTagData({...newTagData, colorId: color.id})} className={`w-6 h-6 rounded-full border border-black/10 ${newTagData.colorId === color.id ? 'ring-2 ring-[#8c7b6c] ring-offset-1' : ''}`} style={{ backgroundColor: color.bg }} title={color.name}></button>
+                       <button key={color.id} type="button" onClick={() => setNewTagData({...newTagData, colorId: color.id})} className={`w-6 h-6 rounded-full border border-black/10 ${newTagData.colorId === color.id ? 'ring-2 ring-[#8c7b6c] ring-offset-1' : 'opacity-70 hover:opacity-100'}`} style={{ backgroundColor: color.bg }} title={color.name}></button>
                      ))}
                    </div>
                    <button type="button" onClick={() => setIsTagManagerOpen(false)} className="text-xs text-[#a8a49d] mt-2 underline w-full text-right">關閉</button>
