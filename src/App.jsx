@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   MapPin, Utensils, Bus, Plus, Trash2, X, 
   Calendar as CalendarIcon, Clock, Image as ImageIcon, 
   Cloud, Save, ChevronLeft, Minus, MoreVertical, Map, BookOpen,
-  StickyNote, Tag, GripVertical, ExternalLink, Link as LinkIcon, Loader
+  StickyNote, Tag, GripVertical, ExternalLink, Link as LinkIcon, Loader,
+  MoveVertical
 } from 'lucide-react';
 
 // --- Firebase Imports ---
@@ -35,6 +36,19 @@ const appId = 'travel-notebook-v1';
 
 // --- Constants & Helpers ---
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
+
+// 時間轉換工具
+const timeToMinutes = (time) => {
+  if (!time) return 0;
+  const [h, m] = time.split(':').map(Number);
+  return h * 60 + m;
+};
+
+const minutesToTime = (minutes) => {
+  const h = Math.floor(minutes / 60) % 24; // 確保在 24 小時內
+  const m = Math.floor(minutes % 60);
+  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+};
 
 const formatTimeFromHour = (hour) => {
   const h = Math.floor(hour);
@@ -201,7 +215,7 @@ const TripDashboard = ({ user, onSelectTrip }) => {
 const TripPlanner = ({ user, tripId, onBack }) => {
   const [tripData, setTripData] = useState(null);
   const [events, setEvents] = useState([]);
-  const [links, setLinks] = useState([]); // Links (formerly resources)
+  const [links, setLinks] = useState([]);
   const [loading, setLoading] = useState(true);
   
   // Modals & Popovers
@@ -210,17 +224,17 @@ const TripPlanner = ({ user, tripId, onBack }) => {
   
   // Editing & Forms
   const [currentEvent, setCurrentEvent] = useState(null);
-  const [formData, setFormData] = useState({ name: '', tagId: '', day: 1, time: '09:00', content: '', images: [] });
+  const [formData, setFormData] = useState({ name: '', tagId: '', day: 1, time: '09:00', endTime: '10:00', content: '', images: [] });
   const [newTagData, setNewTagData] = useState({ name: '', colorId: 'green' });
-  
-  // New Link States
   const [linkUrl, setLinkUrl] = useState('');
   const [linkTitle, setLinkTitle] = useState('');
   const [isFetchingLink, setIsFetchingLink] = useState(false);
 
-  // DnD
+  // DnD & Resize
   const [draggedEventId, setDraggedEventId] = useState(null);
   const [draggedLink, setDraggedLink] = useState(null);
+  const [resizingEvent, setResizingEvent] = useState(null); // { id, originalTop, originalHeight, startY }
+  const [resizePreview, setResizePreview] = useState(null); // { id, height, endTime } for live visual feedback
 
   // 1. Data Listeners
   useEffect(() => {
@@ -246,9 +260,60 @@ const TripPlanner = ({ user, tripId, onBack }) => {
     return () => { unsubscribeTrip(); unsubscribeEvents(); unsubscribeLinks(); };
   }, [user, tripId]);
 
+  // Global Resize Listeners
+  useEffect(() => {
+    const handleGlobalMouseMove = (e) => {
+      if (resizingEvent) {
+        e.preventDefault();
+        const deltaY = e.clientY - resizingEvent.startY;
+        // 1 minute = 1px (since 60 mins = 60px)
+        const newDurationMins = Math.max(15, resizingEvent.originalDuration + deltaY); // Min 15 mins
+        
+        // Calculate new end time based on original start time + new duration
+        const startTimeMins = timeToMinutes(resizingEvent.event.time);
+        const newEndTimeMins = startTimeMins + newDurationMins;
+        const newEndTime = minutesToTime(newEndTimeMins);
+
+        setResizePreview({
+          id: resizingEvent.id,
+          height: newDurationMins, // height in px = minutes
+          endTime: newEndTime
+        });
+      }
+    };
+
+    const handleGlobalMouseUp = async (e) => {
+      if (resizingEvent && resizePreview) {
+        e.preventDefault();
+        // Commit change to Firestore
+        await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'trips', tripId, 'events', resizingEvent.id), {
+          endTime: resizePreview.endTime
+        });
+        setResizingEvent(null);
+        setResizePreview(null);
+      } else if (resizingEvent) {
+        setResizingEvent(null); // Cancel if no move
+      }
+    };
+
+    if (resizingEvent) {
+      window.addEventListener('mousemove', handleGlobalMouseMove);
+      window.addEventListener('mouseup', handleGlobalMouseUp);
+    }
+    return () => {
+      window.removeEventListener('mousemove', handleGlobalMouseMove);
+      window.removeEventListener('mouseup', handleGlobalMouseUp);
+    };
+  }, [resizingEvent, resizePreview, appId, user, tripId]);
+
   // --- CRUD Logic ---
   const handleSaveEvent = async (e) => {
     e.preventDefault();
+    if (timeToMinutes(formData.endTime) <= timeToMinutes(formData.time)) {
+      alert("結束時間必須晚於開始時間");
+      return;
+    }
+
     const collectionRef = collection(db, 'artifacts', appId, 'users', user.uid, 'trips', tripId, 'events');
     try {
       if (currentEvent) {
@@ -271,65 +336,72 @@ const TripPlanner = ({ user, tripId, onBack }) => {
     setIsTagManagerOpen(false);
   };
 
-  // --- Link Management (Fetch Metadata) ---
   const handleAddLink = async (e) => {
     e.preventDefault();
     if (!linkUrl) return;
     setIsFetchingLink(true);
 
     try {
-      let title = linkTitle; // Priority: User entered title
+      let title = linkTitle;
       let description = '';
       let image = '';
       let url = linkUrl;
-
       if (!linkUrl.startsWith('http')) url = 'https://' + linkUrl;
 
-      // Always try to fetch metadata for image/description (and title if user didn't provide one)
       try {
         const response = await fetch(`https://api.microlink.io?url=${encodeURIComponent(url)}`);
         const data = await response.json();
         if (data.status === 'success') {
-          if (!title) title = data.data.title || url; // Fallback if no user title
+          if (!title) title = data.data.title || url;
           description = data.data.description || '';
           image = data.data.image?.url || '';
         }
-      } catch (err) {
-        console.warn("Failed to fetch metadata", err);
-        if (!title) title = url; // Ultimate fallback
-      }
+      } catch (err) { console.warn("Metadata fetch failed", err); if (!title) title = url; }
 
       await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'trips', tripId, 'links'), {
-        url, title, description, image,
-        createdAt: new Date().toISOString()
+        url, title, description, image, createdAt: new Date().toISOString()
       });
-      setLinkUrl('');
-      setLinkTitle('');
-    } catch (err) {
-      alert("新增連結失敗");
-    } finally {
-      setIsFetchingLink(false);
-    }
+      setLinkUrl(''); setLinkTitle('');
+    } catch (err) { alert("新增失敗"); } finally { setIsFetchingLink(false); }
   };
 
   const handleDeleteLink = async (id) => await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'trips', tripId, 'links', id));
 
-  // --- Drag & Drop Logic ---
+  // --- Drag & Drop & Resize Logic ---
   const handleDrop = async (e, targetDay, targetHour) => {
     e.preventDefault();
-    const newTime = formatTimeFromHour(targetHour);
+    const newStartTimeStr = formatTimeFromHour(targetHour);
+    const newStartTimeMins = timeToMinutes(newStartTimeStr);
 
     if (draggedEventId) {
-      setEvents(prev => prev.map(ev => ev.id === draggedEventId ? { ...ev, day: targetDay, time: newTime } : ev));
-      await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'trips', tripId, 'events', draggedEventId), { day: targetDay, time: newTime });
+      // Find original event to calculate duration
+      const event = events.find(ev => ev.id === draggedEventId);
+      if (event) {
+        const oldStartMins = timeToMinutes(event.time);
+        const oldEndMins = timeToMinutes(event.endTime || minutesToTime(oldStartMins + 60));
+        const durationMins = oldEndMins - oldStartMins;
+
+        const newEndTimeStr = minutesToTime(newStartTimeMins + durationMins);
+
+        // Optimistic update
+        setEvents(prev => prev.map(ev => ev.id === draggedEventId ? { ...ev, day: targetDay, time: newStartTimeStr, endTime: newEndTimeStr } : ev));
+        
+        await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'trips', tripId, 'events', draggedEventId), { 
+          day: targetDay, 
+          time: newStartTimeStr,
+          endTime: newEndTimeStr 
+        });
+      }
       setDraggedEventId(null);
     } else if (draggedLink) {
-      // Create Event from Link
+      // Create Event from Link (Default 1 hour)
+      const newEndTimeStr = minutesToTime(newStartTimeMins + 60);
       const newEvent = {
         name: draggedLink.title || "新連結行程",
         tagId: tripData.tags[0]?.id || '',
         day: targetDay,
-        time: newTime,
+        time: newStartTimeStr,
+        endTime: newEndTimeStr,
         content: `${draggedLink.description}\n\n來源: ${draggedLink.url}`,
         images: draggedLink.image ? [draggedLink.image] : [],
         createdAt: new Date().toISOString()
@@ -339,9 +411,24 @@ const TripPlanner = ({ user, tripId, onBack }) => {
     }
   };
 
+  const handleResizeStart = (e, event) => {
+    e.stopPropagation(); // Prevent drag start
+    const startMins = timeToMinutes(event.time);
+    const endMins = timeToMinutes(event.endTime || minutesToTime(startMins + 60));
+    setResizingEvent({
+      id: event.id,
+      event: event,
+      originalDuration: endMins - startMins,
+      startY: e.clientY
+    });
+  };
+
   // Helpers
   const openModal = (event = null, defaultDay = 1, defaultTime = '09:00') => {
-    setFormData(event || { name: '', tagId: tripData.tags[0]?.id || 'sightseeing', day: defaultDay, time: defaultTime, content: '', images: [] });
+    const defaultEndTime = minutesToTime(timeToMinutes(defaultTime) + 60);
+    setFormData(event ? { ...event, endTime: event.endTime || minutesToTime(timeToMinutes(event.time) + 60) } : { 
+      name: '', tagId: tripData.tags[0]?.id || 'sightseeing', day: defaultDay, time: defaultTime, endTime: defaultEndTime, content: '', images: [] 
+    });
     setCurrentEvent(event);
     setIsModalOpen(true);
   };
@@ -427,18 +514,50 @@ const TripPlanner = ({ user, tripId, onBack }) => {
                 ))}
                 
                 {events.filter(ev => Number(ev.day) === day).map(ev => {
-                  const startHour = parseFloat(ev.time.split(':')[0]) + parseFloat(ev.time.split(':')[1])/60;
+                  const startMins = timeToMinutes(ev.time);
+                  const endMins = timeToMinutes(ev.endTime || minutesToTime(startMins + 60)); // Default to 1 hr duration if missing
+                  
+                  // If resizing this specific event, use the preview data
+                  const isResizing = resizingEvent?.id === ev.id;
+                  const displayEndMins = isResizing && resizePreview ? timeToMinutes(resizePreview.endTime) : endMins;
+                  const durationMins = Math.max(15, displayEndMins - startMins); // Min 15 mins height
+                  
+                  // 1 minute = 1px height
+                  const height = durationMins; 
+
                   return (
-                    <div key={ev.id} draggable onDragStart={(e) => { setDraggedEventId(ev.id); e.target.style.opacity='0.5'; }} onDragEnd={(e) => { setDraggedEventId(null); e.target.style.opacity='1'; }}
+                    <div 
+                      key={ev.id} 
+                      draggable={!isResizing} // Disable drag while resizing
+                      onDragStart={(e) => { setDraggedEventId(ev.id); e.target.style.opacity='0.5'; }} 
+                      onDragEnd={(e) => { setDraggedEventId(null); e.target.style.opacity='1'; }}
                       onClick={(e) => { e.stopPropagation(); openModal(ev); }}
-                      className="absolute left-1 right-1 px-3 py-2 cursor-move select-none overflow-hidden hover:z-20 group transition-transform hover:-translate-y-0.5 hover:shadow-md rounded-sm"
-                      style={{ top: `${startHour * 60}px`, height: '56px', ...getTagStyle(ev.tagId) }}
+                      className={`absolute left-1 right-1 px-3 py-1 select-none overflow-hidden hover:z-20 group transition-shadow hover:shadow-md rounded-sm border-b-2 border-black/5 ${isResizing ? 'shadow-lg z-50 cursor-ns-resize' : 'cursor-move'}`}
+                      style={{ 
+                        top: `${startMins}px`, 
+                        height: `${height}px`, 
+                        ...getTagStyle(ev.tagId),
+                        zIndex: isResizing ? 100 : 10
+                      }}
                     >
-                      <div className="flex justify-between items-start">
-                        <span className="font-bold text-sm truncate">{ev.time} {ev.name}</span>
-                        <button onClick={(e) => { e.stopPropagation(); handleDeleteEvent(ev.id); }} className="opacity-0 group-hover:opacity-100 text-[#8a4a4a] hover:bg-[#8a4a4a]/10 p-0.5 rounded"><Trash2 size={14}/></button>
+                      <div className="flex justify-between items-start h-full relative">
+                        <div className="flex-1 min-w-0">
+                           <div className="font-bold text-xs truncate flex items-center gap-1">
+                             <span className="opacity-75 font-mono">{ev.time}-{isResizing && resizePreview ? resizePreview.endTime : ev.endTime || minutesToTime(startMins + 60)}</span>
+                           </div>
+                           <div className="font-bold text-sm truncate leading-tight mt-0.5">{ev.name}</div>
+                           {height > 40 && <div className="text-xs opacity-80 truncate mt-1">{ev.content?.split('\n')[0]}</div>}
+                        </div>
+                        <button onClick={(e) => { e.stopPropagation(); handleDeleteEvent(ev.id); }} className="opacity-0 group-hover:opacity-100 text-[#8a4a4a] hover:bg-[#8a4a4a]/10 p-0.5 rounded shrink-0"><Trash2 size={14}/></button>
+                        
+                        {/* Resize Handle */}
+                        <div 
+                          className="absolute bottom-0 left-0 right-0 h-3 cursor-ns-resize flex justify-center items-end hover:bg-black/5"
+                          onMouseDown={(e) => handleResizeStart(e, ev)}
+                        >
+                           <MoveVertical size={10} className="opacity-0 group-hover:opacity-50 text-current mb-0.5" />
+                        </div>
                       </div>
-                      <div className="mt-1 text-xs opacity-80 truncate">{ev.content?.split('\n')[0]}</div>
                     </div>
                   );
                 })}
@@ -532,7 +651,10 @@ const TripPlanner = ({ user, tripId, onBack }) => {
                     {daysArray.map(d => <option key={d} value={d}>{getDisplayDate(tripData.startDate, d-1)}</option>)}
                   </select>
                 </div>
-                <div><label className="block text-sm font-bold text-[#6e685e] mb-2">時間</label><Input type="time" required value={formData.time} onChange={e => setFormData({...formData, time: e.target.value})} /></div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div><label className="block text-sm font-bold text-[#6e685e] mb-2">開始</label><Input type="time" required value={formData.time} onChange={e => setFormData({...formData, time: e.target.value})} /></div>
+                  <div><label className="block text-sm font-bold text-[#6e685e] mb-2">結束</label><Input type="time" required value={formData.endTime} onChange={e => setFormData({...formData, endTime: e.target.value})} /></div>
+                </div>
               </div>
 
               <div>
