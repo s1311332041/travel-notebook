@@ -4,7 +4,7 @@ import {
   Calendar as CalendarIcon, Clock, Image as ImageIcon, 
   Cloud, Save, ChevronLeft, Minus, MoreVertical, Map, BookOpen,
   StickyNote, Tag, GripVertical, ExternalLink, Link as LinkIcon, Loader,
-  MoveVertical
+  MoveVertical, LogIn, LogOut, User
 } from 'lucide-react';
 
 // --- Firebase Imports ---
@@ -15,7 +15,7 @@ import {
 } from "firebase/firestore";
 import { 
   getAuth, signInAnonymously, signInWithCustomToken, 
-  onAuthStateChanged 
+  onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut
 } from "firebase/auth";
 
 // --- Firebase Initialization ---
@@ -117,6 +117,24 @@ const TripDashboard = ({ user, onSelectTrip }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [newTrip, setNewTrip] = useState({ name: '', startDate: new Date().toISOString().split('T')[0], days: 3, coverImage: null });
 
+  // Auth Handling
+  const handleLogin = async () => {
+    const provider = new GoogleAuthProvider();
+    try {
+      await signInWithPopup(auth, provider);
+      // Login successful, auth state listener will update 'user'
+    } catch (error) {
+      console.error(error);
+      alert("登入失敗，請檢查 Firebase Console 設定");
+    }
+  };
+
+  const handleLogout = async () => {
+    if (confirm("確定要登出嗎？")) {
+      await signOut(auth);
+    }
+  };
+
   useEffect(() => {
     if (!user) return;
     const q = query(collection(db, 'artifacts', appId, 'users', user.uid, 'trips'), orderBy('createdAt', 'desc'));
@@ -157,6 +175,28 @@ const TripDashboard = ({ user, onSelectTrip }) => {
   return (
     <div className="min-h-screen bg-[#f5f0e1] p-6 font-serif text-[#4a453e]" style={{ backgroundImage: 'radial-gradient(#e5e0d1 1px, transparent 1px)', backgroundSize: '20px 20px' }}>
       <div className="max-w-5xl mx-auto">
+        {/* User Status Bar */}
+        <div className="flex justify-end mb-4">
+          {user && !user.isAnonymous ? (
+             <div className="flex items-center gap-3 bg-[#fdfbf7] px-4 py-2 rounded-full border border-[#d6d3cb] shadow-sm">
+               {user.photoURL ? (
+                 <img src={user.photoURL} className="w-6 h-6 rounded-full" alt="avatar" />
+               ) : (
+                 <User size={18} className="text-[#8c7b6c]"/>
+               )}
+               <span className="text-sm font-bold text-[#5c554b]">{user.displayName || user.email}</span>
+               <div className="w-px h-4 bg-[#d6d3cb] mx-1"></div>
+               <button onClick={handleLogout} className="text-xs text-[#8a4a4a] hover:underline flex items-center gap-1">
+                 <LogOut size={12}/> 登出
+               </button>
+             </div>
+          ) : (
+             <Button onClick={handleLogin} variant="primary" className="!py-1.5 !px-3 !text-xs shadow-md">
+               <LogIn size={14}/> 登入以同步資料
+             </Button>
+          )}
+        </div>
+
         <div className="flex justify-between items-end mb-10 border-b-2 border-[#8c7b6c] pb-4">
           <div>
             <h1 className="text-3xl font-bold text-[#2c2825] flex items-center gap-3">
