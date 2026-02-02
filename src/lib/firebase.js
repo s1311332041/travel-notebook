@@ -1,3 +1,7 @@
+import { initializeApp } from "firebase/app";
+import { getAuth, GoogleAuthProvider } from "firebase/auth";
+import { getFirestore } from "firebase/firestore";
+
 // --- Firebase Initialization ---
 const firebaseConfig = {
   apiKey: "AIzaSyBS8lgDE-FGahGyvP8ycCz7QDsM6kv87M8",
@@ -10,6 +14,7 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-const appId = 'travel-notebook-v1';
+export const auth = getAuth(app);
+export const db = getFirestore(app);
+export const googleProvider = new GoogleAuthProvider();
+export const appId = "my-travel-notebook-v1"; 
